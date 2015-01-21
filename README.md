@@ -1,83 +1,52 @@
+A coretemp driver implementation for Illumos
+============================================
+
+This is a kstat producer. Included is an utility (```coretempstat```) that displays the temperatures in a nice format.
+
+Install
+-------
+
+```make install```
+
+Test
+----
+
+Sample output:
+
 ```console
 # kstat -m cpu_info -n "coretemp*"
 module: cpu_info                        instance: 0
 name:   coretemp0                       class:    misc
         chip_id                         0
+        chip_temp                       41
         core_id                         0
-        crtime                          222140.871118867
-        package_temp                    41
-        snaptime                        222146.401705929
-        temperature                     33
+        core_temp                       33
+        crtime                          258514.520731534
+        snaptime                        258745.631569397
+        target_temp                     90
         tj_max                          94
+        valid                           1
 
 module: cpu_info                        instance: 1
 name:   coretemp1                       class:    misc
         chip_id                         0
+        chip_temp                       41
         core_id                         1
-        crtime                          222140.871124420
-        package_temp                    41
-        snaptime                        222146.401725789
-        temperature                     34
+        core_temp                       33
+        crtime                          258514.520737457
+        snaptime                        258745.631591757
+        target_temp                     90
         tj_max                          94
+        valid                           1
+```
 
-module: cpu_info                        instance: 2
-name:   coretemp2                       class:    misc
-        chip_id                         0
-        core_id                         2
-        crtime                          222140.871126384
-        package_temp                    41
-        snaptime                        222146.401743294
-        temperature                     33
-        tj_max                          94
+```coretempstat``` output:
 
-module: cpu_info                        instance: 3
-name:   coretemp3                       class:    misc
-        chip_id                         0
-        core_id                         3
-        crtime                          222140.871128526
-        package_temp                    41
-        snaptime                        222146.401753833
-        temperature                     41
-        tj_max                          94
-
-module: cpu_info                        instance: 4
-name:   coretemp4                       class:    misc
-        chip_id                         0
-        core_id                         0
-        crtime                          222140.871130679
-        package_temp                    41
-        snaptime                        222146.401770669
-        temperature                     33
-        tj_max                          94
-
-module: cpu_info                        instance: 5
-name:   coretemp5                       class:    misc
-        chip_id                         0
-        core_id                         1
-        crtime                          222140.871132661
-        package_temp                    41
-        snaptime                        222146.401787663
-        temperature                     34
-        tj_max                          94
-
-module: cpu_info                        instance: 6
-name:   coretemp6                       class:    misc
-        chip_id                         0
-        core_id                         2
-        crtime                          222140.871134583
-        package_temp                    41
-        snaptime                        222146.401805080
-        temperature                     33
-        tj_max                          94
-
-module: cpu_info                        instance: 7
-name:   coretemp7                       class:    misc
-        chip_id                         0
-        core_id                         3
-        crtime                          222140.871136464
-        package_temp                    41
-        snaptime                        222146.401822119
-        temperature                     41
-        tj_max                          94
-
+```console
+Found 8 CPUs in 1 socket
+Socket #0 temp : 41 °C
+        Core #0 temp : 32 °C
+        Core #1 temp : 35 °C
+        Core #2 temp : 33 °C
+        Core #3 temp : 41 °C
 ```
