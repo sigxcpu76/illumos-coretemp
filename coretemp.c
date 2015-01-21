@@ -156,7 +156,7 @@ coretemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd) {
 	int i;
 	for (i = 0; i < ncpus; i++) {
 		char kstat_name[13];
-		snprintf(kstat_name, sizeof(kstat_name), "coretemp%d", i);
+		snprintf(kstat_name, sizeof (kstat_name), "coretemp%d", i);
 		kstat_t *ksp = kstat_create(
 			"cpu_info",
 			i,
@@ -203,8 +203,8 @@ static struct dev_ops coretemp_dv_ops = {
 	coretemp_attach,
 	coretemp_detach,
 	nodev,					/* reset */
-	NULL, 
-	(struct bus_ops *)0,
+	NULL,
+	NULL,
 	NULL,
 	ddi_quiesce_not_needed,	/* quiesce */
 };
