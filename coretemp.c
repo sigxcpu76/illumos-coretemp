@@ -136,7 +136,8 @@ coretemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd) {
 	}
 
 	if (!is_x86_feature(x86_featureset, X86FSET_CPUID)) {
-		dev_err(devi, CE_NOTE, "This CPU does not support CPUID instruction");
+		dev_err(devi, CE_NOTE,
+		    "This CPU does not support CPUID instruction");
 		return (DDI_FAILURE);
 	}
 
@@ -144,7 +145,8 @@ coretemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd) {
 		case X86_VENDOR_Intel:
 			break;
 		default:
-			dev_err(devi, CE_NOTE, "This CPU vendor is not supported");
+			dev_err(devi, CE_NOTE,
+			    "This CPU vendor is not supported");
 			return (DDI_FAILURE);
 	}
 
@@ -157,6 +159,7 @@ coretemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd) {
 	for (i = 0; i < ncpus; i++) {
 		char kstat_name[13];
 		snprintf(kstat_name, sizeof (kstat_name), "coretemp%d", i);
+
 		kstat_t *ksp = kstat_create(
 			"cpu_info",
 			i,
@@ -241,72 +244,86 @@ _info(struct modinfo *modinfo)
 
 
 /* private stuff */
-
 static int
-coretemp_fill_fields(cpu_t *cpu)
+intel_fill_fields(cpu_t *cpu)
 {
 	uint64_t msr;
 	struct cpuid_regs regs;
+	int has_package_temp_monitor, has_thermal_monitoring;
+	int tj_max, model;
 
+	/* check CPUID data first */
+	coretemp_cpuid_on_cpu(cpu, 0x06, &regs);
+	has_package_temp_monitor =
+	    (regs.cp_eax >> 6) & 0x01;
+	has_thermal_monitoring = (regs.cp_eax) & 0x01;
+
+	/* initialize with invalid values */
+	coretemp_kstat_t.tj_max.value.i32 = -1;
+	coretemp_kstat_t.chip_temp.value.i32 = -1;
+	coretemp_kstat_t.core_temp.value.i32 = -1;
+	coretemp_kstat_t.target_temp.value.i32 = -1;
+
+	if (!has_thermal_monitoring) {
+		return (0);
+	}
+
+	tj_max = 100;
+
+	model = cpuid_getmodel(cpu);
+	/* int family = cpuid_getfamily(cpu); */
+	/* int stepping = cpuid_getstep(cpu); */
+
+	/*  TjMAX */
+	if (model > 0x0e &&
+	    model != 0x1c &&
+	    model != 0x26 &&
+	    model != 0x27 &&
+	    model != 0x35 &&
+	    model != 0x36) {
+		if (!coretemp_rdmsr_on_cpu(cpu, 0x1a2, &msr)) {
+			tj_max = (msr >> 16) & 0x7f;
+			coretemp_kstat_t.
+			    tj_max.value.i32 = tj_max;
+
+			/* temp target (?) */
+			if ((model > 0x0e) && (model != 0x1c)) {
+				coretemp_kstat_t.
+				    target_temp.value.i32 =
+				    tj_max - ((msr >> 8) & 0xff);
+			}
+		}
+	}
+
+	int pkg_temp;
+	if (has_package_temp_monitor) {
+		if (coretemp_rdmsr_on_cpu(cpu, 0x1b1, &msr) == 0) {
+			pkg_temp = tj_max - ((msr >> 16) & 0x7f);
+			coretemp_kstat_t.chip_temp.value.i32 = pkg_temp;
+		}
+	}
+
+	int core_temp;
+	if (coretemp_rdmsr_on_cpu(cpu, 0x19c, &msr) == 0) {
+		core_temp = tj_max - ((msr >> 16) & 0x7f);
+		coretemp_kstat_t.core_temp.value.i32 = core_temp;
+		coretemp_kstat_t.valid_reading.value.i32 = 1;
+
+		return (0);
+	}
+
+	return (EINVAL);
+
+}
+static int
+coretemp_fill_fields(cpu_t *cpu)
+{
 	switch (x86_vendor) {
-		case X86_VENDOR_Intel:
-			/* check CPUID data first */
-			coretemp_cpuid_on_cpu(cpu, 0x06, &regs);
-			int has_package_temp_monitor =
-			    (regs.cp_eax >> 6) & 0x01;
-			int has_thermal_monitoring = (regs.cp_eax) & 0x01;
-
-			/* initialize with invalid values */
-			coretemp_kstat_t.tj_max.value.i32 = -1;
-			coretemp_kstat_t.chip_temp.value.i32 = -1;
-			coretemp_kstat_t.core_temp.value.i32 = -1;
-			coretemp_kstat_t.target_temp.value.i32 = -1;
-
-			if (!has_thermal_monitoring) {
-				return (0);
-			}
-
-			int tj_max = 100;
-
-			int model = cpuid_getmodel(cpu);
-			/* int family = cpuid_getfamily(cpu); */
-			/* int stepping = cpuid_getstep(cpu); */
-
-			/*  TjMAX */
-			if (model > 0x0e &&
-			    model != 0x1c &&
-			    model != 0x26 &&
-			    model != 0x27 &&
-			    model != 0x35 &&
-			    model != 0x36) {
-				if (!coretemp_rdmsr_on_cpu(cpu, 0x1a2, &msr)) {
-					tj_max = (msr >> 16) & 0x7f;
-					coretemp_kstat_t.tj_max.value.i32 =
-					    tj_max;
-
-					/* temp target (?) */
-					if ((model > 0x0e) && (model != 0x1c)) {
-						coretemp_kstat_t.target_temp.value.i32 =
-						    tj_max - ((msr >> 8) & 0xff);
-					}
-				}
-			}
-
-			if (has_package_temp_monitor) {
-				if (coretemp_rdmsr_on_cpu(cpu, 0x1b1, &msr) == 0) {
-					int pkg_temp = tj_max - ((msr >> 16) & 0x7f);
-					coretemp_kstat_t.chip_temp.value.i32 = pkg_temp;
-				}
-			}
-
-			if (coretemp_rdmsr_on_cpu(cpu, 0x19c, &msr) == 0) {
-				int core_temp = tj_max - ((msr >> 16) & 0x7f);
-				coretemp_kstat_t.core_temp.value.i32 = core_temp;
-				coretemp_kstat_t.valid_reading.value.i32 = 1;
-			}
-		default:
-			/* vendor not implemented (yet! :) ) */
-			return (EINVAL);
+	case X86_VENDOR_Intel:
+		intel_fill_fields(cpu);
+	default:
+		/* vendor not implemented (yet! :) ) */
+		return (EINVAL);
 	}
 
 	return (0);
@@ -319,8 +336,11 @@ coretemp_msr_req(uintptr_t req_ptr, uintptr_t error_ptr)
 {
 
 	label_t ljb;
-	uint32_t msr_index = ((msr_req_t *)req_ptr)->msr_index;
-	uint64_t *result = ((msr_req_t *)req_ptr)->result;
+	uint32_t msr_index;
+	uint64_t *result;
+
+	msr_index = ((msr_req_t *)req_ptr)->msr_index;
+	result = ((msr_req_t *)req_ptr)->result;
 
 	int error;
 
