@@ -50,3 +50,20 @@ Socket #0 temp : 41 °C
         Core #2 temp : 33 °C
         Core #3 temp : 41 °C
 ```
+
+For graphing and/or monitoring there is ```coretempstat -p```:
+
+```console
+# ./coretempstat -p
+0 33
+1 34
+2 33
+3 41
+```
+
+or
+
+```console
+# ./coretempstat -p 2
+33
+```
