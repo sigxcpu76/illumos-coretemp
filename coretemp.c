@@ -47,9 +47,13 @@
 #include <sys/cpuvar.h>
 #include <sys/pghw.h>
 
+#include <coretemp.h>
+
 #include <sys/x86_archext.h>
 
 static dev_info_t *coretemp_devi;
+
+static kmutex_t coretemp_mutex;
 
 struct coretemp_kstat_t {
 		kstat_named_t chip_id;
@@ -157,14 +161,11 @@ coretemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd) {
 	/* initialize a kstat instance for each CPU */
 	int i;
 	for (i = 0; i < ncpus; i++) {
-		char kstat_name[13];
-		snprintf(kstat_name, sizeof (kstat_name), "coretemp%d", i);
-
 		kstat_t *ksp = kstat_create(
-			"cpu_info",
+			KSTAT_CORETEMP_MODULE,
 			i,
-			kstat_name,
-			"misc",
+			KSTAT_CORETEMP_NAME,
+			KSTAT_CORETEMP_CLASS,
 			KSTAT_TYPE_NAMED,
 			sizeof (coretemp_kstat_t) / sizeof (kstat_named_t),
 			KSTAT_FLAG_VIRTUAL);
@@ -175,6 +176,7 @@ coretemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd) {
 
 		entries[i] = ksp;
 		ksp->ks_data = (void *)&coretemp_kstat_t;
+		ksp->ks_lock = &coretemp_mutex;
 		ksp->ks_update = coretemp_kstat_update;
 		ksp->ks_private = (void *)cpu[i];
 		kstat_install(ksp);
