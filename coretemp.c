@@ -23,6 +23,7 @@
  */
 /*
  * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2015, Alexandru Pirvulescu
  */
 
 
@@ -51,28 +52,35 @@
 
 #include <sys/x86_archext.h>
 
-static dev_info_t *coretemp_devi;
+static dev_info_t *ctemp_devi;
 
-static kmutex_t coretemp_mutex;
+static kmutex_t ctemp_mutex;
 
-struct coretemp_kstat_t {
+struct ctemp_kstat_t {
 		kstat_named_t chip_id;
 		kstat_named_t core_id;
 		kstat_named_t core_temp;
 		kstat_named_t chip_temp;
 		kstat_named_t tj_max;
 		kstat_named_t target_temp;
-		kstat_named_t valid_reading;
-} coretemp_kstat_t = {
+		kstat_named_t valid;
+} ctemp_kstat_t = {
 		{ "chip_id",		KSTAT_DATA_INT32 },
 		{ "core_id",		KSTAT_DATA_INT32 },
 		{ "core_temp",		KSTAT_DATA_INT32 },
 		{ "chip_temp",		KSTAT_DATA_INT32 },
-		{ "tj_max",			KSTAT_DATA_INT32 },
+		{ "tj_max",		KSTAT_DATA_INT32 },
 		{ "target_temp",	KSTAT_DATA_INT32 },
-		{ "valid",			KSTAT_DATA_INT32 },
+		{ "valid",		KSTAT_DATA_INT32 },
 
 };
+
+static struct cpuid_regs current_cpuid;
+
+typedef struct {
+	uint32_t eax;
+	uint32_t edx;
+} msr_regs_t;
 
 typedef struct {
 	uint32_t msr_index;
@@ -81,20 +89,25 @@ typedef struct {
 
 kstat_t *entries[1024];
 
-static int coretemp_fill_fields(cpu_t *cpu);
-static int coretemp_rdmsr_on_cpu(cpu_t *cpu,
-	uint32_t msr_index, uint64_t *result);
-static void coretemp_cpuid_on_cpu(cpu_t *cpu,
-	uint32_t cpuid_func, struct cpuid_regs *result);
+static int ctemp_fill_fields(cpu_t *cpu);
+
+static int ctemp_rdmsr(cpu_t *cpu,
+	uint32_t msr_index, msr_regs_t *result);
+static void ctemp_cpuid(cpu_t *cpu, uint32_t cpuid_func,
+    struct cpuid_regs *result);
+
+static void ctemp_fill_tj_max(cpu_t *cpu);
+static void ctemp_fill_pkg_temp(cpu_t *cpu);
+static void ctemp_fill_core_temp(cpu_t *cpu);
 
 static int
-coretemp_kstat_update(kstat_t *kstat, int rw)
+ctemp_kstat_update(kstat_t *kstat, int rw)
 {
 	if (rw == KSTAT_WRITE) {
 		return (EACCES);
 	}
 
-	coretemp_kstat_t.valid_reading.value.i32 = 0;
+	ctemp_kstat_t.valid.value.i32 = 0;
 
 	if (!is_x86_feature(x86_featureset, X86FSET_MSR)) {
 		return (ENXIO);
@@ -102,19 +115,19 @@ coretemp_kstat_update(kstat_t *kstat, int rw)
 
 	cpu_t *cpu_ptr = (cpu_t *)kstat->ks_private;
 
-	coretemp_fill_fields(cpu_ptr);
+	ctemp_fill_fields(cpu_ptr);
 
 	/* misc data */
-	coretemp_kstat_t.core_id.value.i32 = cpuid_get_pkgcoreid(cpu_ptr);
-	coretemp_kstat_t.chip_id.value.i32 =
+	ctemp_kstat_t.core_id.value.i32 = cpuid_get_pkgcoreid(cpu_ptr);
+	ctemp_kstat_t.chip_id.value.i32 =
 	    pg_plat_hw_instance_id(cpu_ptr, PGHW_CHIP);
 
 	return (0);
 }
 
 static int
-coretemp_getinfo(dev_info_t *devi, ddi_info_cmd_t cmd, void *arg,
-	void **result)
+ctemp_getinfo(dev_info_t *devi, ddi_info_cmd_t cmd, void *arg,
+    void **result)
 {
 	switch (cmd) {
 		case DDI_INFO_DEVT2DEVINFO:
@@ -127,14 +140,15 @@ coretemp_getinfo(dev_info_t *devi, ddi_info_cmd_t cmd, void *arg,
 	if (cmd == DDI_INFO_DEVT2INSTANCE) {
 		*result = 0;
 	} else {
-		*result = coretemp_devi;
+		*result = ctemp_devi;
 	}
 
 	return (DDI_SUCCESS);
 }
 
 static int
-coretemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd) {
+ctemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
+{
 	if (cmd != DDI_ATTACH) {
 		return (DDI_FAILURE);
 	}
@@ -156,28 +170,28 @@ coretemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd) {
 
 
 
-	coretemp_devi = devi;
+	ctemp_devi = devi;
 
 	/* initialize a kstat instance for each CPU */
 	int i;
 	for (i = 0; i < ncpus; i++) {
 		kstat_t *ksp = kstat_create(
-			KSTAT_CORETEMP_MODULE,
-			i,
-			KSTAT_CORETEMP_NAME,
-			KSTAT_CORETEMP_CLASS,
-			KSTAT_TYPE_NAMED,
-			sizeof (coretemp_kstat_t) / sizeof (kstat_named_t),
-			KSTAT_FLAG_VIRTUAL);
+		    KSTAT_CORETEMP_MODULE,
+		    i,
+		    KSTAT_CORETEMP_NAME,
+		    KSTAT_CORETEMP_CLASS,
+		    KSTAT_TYPE_NAMED,
+		    sizeof (ctemp_kstat_t) / sizeof (kstat_named_t),
+		    KSTAT_FLAG_VIRTUAL);
 		if (!ksp) {
 			dev_err(devi, CE_WARN, "Failed to create kstat entry");
 			return (DDI_FAILURE);
 		}
 
 		entries[i] = ksp;
-		ksp->ks_data = (void *)&coretemp_kstat_t;
-		ksp->ks_lock = &coretemp_mutex;
-		ksp->ks_update = coretemp_kstat_update;
+		ksp->ks_data = (void *)&ctemp_kstat_t;
+		ksp->ks_lock = &ctemp_mutex;
+		ksp->ks_update = ctemp_kstat_update;
 		ksp->ks_private = (void *)cpu[i];
 		kstat_install(ksp);
 	}
@@ -185,11 +199,12 @@ coretemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd) {
 }
 
 static int
-coretemp_detach(dev_info_t *devi, ddi_detach_cmd_t cmd) {
+ctemp_detach(dev_info_t *devi, ddi_detach_cmd_t cmd)
+{
 	if (cmd != DDI_DETACH) {
 		return (DDI_FAILURE);
 	}
-	coretemp_devi = NULL;
+	ctemp_devi = NULL;
 
 	int i;
 	for (i = 0; i < ncpus; i++) {
@@ -199,14 +214,14 @@ coretemp_detach(dev_info_t *devi, ddi_detach_cmd_t cmd) {
 	return (DDI_SUCCESS);
 }
 
-static struct dev_ops coretemp_dv_ops = {
+static struct dev_ops ctemp_dv_ops = {
 	DEVO_REV,
 	0,
-	coretemp_getinfo,
+	ctemp_getinfo,
 	nulldev,    			/* identify */
 	nulldev,    			/* probe */
-	coretemp_attach,
-	coretemp_detach,
+	ctemp_attach,
+	ctemp_detach,
 	nodev,					/* reset */
 	NULL,
 	NULL,
@@ -217,7 +232,7 @@ static struct dev_ops coretemp_dv_ops = {
 static struct modldrv modldrv = {
 	&mod_driverops,
 	"coretemp driver 1.0",
-	&coretemp_dv_ops
+	&ctemp_dv_ops
 };
 
 static struct modlinkage modl = {
@@ -246,79 +261,29 @@ _info(struct modinfo *modinfo)
 
 
 /* private stuff */
-static int
+int
 intel_fill_fields(cpu_t *cpu)
 {
-	uint64_t msr;
-	struct cpuid_regs regs;
-	int has_package_temp_monitor, has_thermal_monitoring;
-	int tj_max, model;
-
-	/* check CPUID data first */
-	coretemp_cpuid_on_cpu(cpu, 0x06, &regs);
-	has_package_temp_monitor =
-	    (regs.cp_eax >> 6) & 0x01;
-	has_thermal_monitoring = (regs.cp_eax) & 0x01;
+	/* initialize data with common values */
+	ctemp_cpuid(cpu, 0x06, &current_cpuid);
 
 	/* initialize with invalid values */
-	coretemp_kstat_t.tj_max.value.i32 = -1;
-	coretemp_kstat_t.chip_temp.value.i32 = -1;
-	coretemp_kstat_t.core_temp.value.i32 = -1;
-	coretemp_kstat_t.target_temp.value.i32 = -1;
+	ctemp_kstat_t.tj_max.value.i32 = 100;
+	ctemp_kstat_t.chip_temp.value.i32 = 0;
+	ctemp_kstat_t.core_temp.value.i32 = 0;
+	ctemp_kstat_t.target_temp.value.i32 = 0;
+	ctemp_kstat_t.valid.value.i32 = 0;
 
-	if (!has_thermal_monitoring) {
-		return (0);
-	}
+	/* fill Tj_max information */
+	ctemp_fill_tj_max(cpu);
+	ctemp_fill_core_temp(cpu);
+	ctemp_fill_pkg_temp(cpu);
 
-	tj_max = 100;
-
-	model = cpuid_getmodel(cpu);
-	/* int family = cpuid_getfamily(cpu); */
-	/* int stepping = cpuid_getstep(cpu); */
-
-	/*  TjMAX */
-	if (model > 0x0e &&
-	    model != 0x1c &&
-	    model != 0x26 &&
-	    model != 0x27 &&
-	    model != 0x35 &&
-	    model != 0x36) {
-		if (!coretemp_rdmsr_on_cpu(cpu, 0x1a2, &msr)) {
-			tj_max = (msr >> 16) & 0x7f;
-			coretemp_kstat_t.
-			    tj_max.value.i32 = tj_max;
-
-			/* temp target (?) */
-			if ((model > 0x0e) && (model != 0x1c)) {
-				coretemp_kstat_t.
-				    target_temp.value.i32 =
-				    tj_max - ((msr >> 8) & 0xff);
-			}
-		}
-	}
-
-	int pkg_temp;
-	if (has_package_temp_monitor) {
-		if (coretemp_rdmsr_on_cpu(cpu, 0x1b1, &msr) == 0) {
-			pkg_temp = tj_max - ((msr >> 16) & 0x7f);
-			coretemp_kstat_t.chip_temp.value.i32 = pkg_temp;
-		}
-	}
-
-	int core_temp;
-	if (coretemp_rdmsr_on_cpu(cpu, 0x19c, &msr) == 0) {
-		core_temp = tj_max - ((msr >> 16) & 0x7f);
-		coretemp_kstat_t.core_temp.value.i32 = core_temp;
-		coretemp_kstat_t.valid_reading.value.i32 = 1;
-
-		return (0);
-	}
-
-	return (EINVAL);
-
+	return (0);
 }
-static int
-coretemp_fill_fields(cpu_t *cpu)
+
+int
+ctemp_fill_fields(cpu_t *cpu)
 {
 	switch (x86_vendor) {
 	case X86_VENDOR_Intel:
@@ -334,7 +299,7 @@ coretemp_fill_fields(cpu_t *cpu)
 
 /* Execute RDMSR on specified CPU */
 static void
-coretemp_msr_req(uintptr_t req_ptr, uintptr_t error_ptr)
+ctemp_msr_req(uintptr_t req_ptr, uintptr_t error_ptr)
 {
 
 	label_t ljb;
@@ -347,7 +312,7 @@ coretemp_msr_req(uintptr_t req_ptr, uintptr_t error_ptr)
 	int error;
 
 	if (on_fault(&ljb)) {
-		dev_err(coretemp_devi, CE_WARN,
+		dev_err(ctemp_devi, CE_WARN,
 		    "Invalid rdmsr(0x%08" PRIx32 ")", (uint32_t)msr_index);
 		error = EFAULT;
 	} else {
@@ -361,23 +326,91 @@ coretemp_msr_req(uintptr_t req_ptr, uintptr_t error_ptr)
 }
 
 static int
-coretemp_rdmsr_on_cpu(cpu_t *cpu, uint32_t msr_index, uint64_t *result)
+ctemp_rdmsr(cpu_t *cpu, uint32_t msr_index, msr_regs_t *result)
 {
 	int error;
 
 	msr_req_t request;
 	request.msr_index = msr_index;
-	request.result = result;
+	request.result = (uint64_t *)result;
 
-	cpu_call(cpu, (cpu_call_func_t)coretemp_msr_req,
+	cpu_call(cpu, (cpu_call_func_t)ctemp_msr_req,
 	    (uintptr_t)&request, (uintptr_t)&error);
 
 	return (error);
 }
 
+static void
+ctemp_fill_tj_max(cpu_t *cpu)
+{
+	int model = cpuid_getmodel(cpu);
+
+	if (model < 0x0e) {
+		return;
+	}
+
+	if ((model == 0x1c) ||
+	    (model == 0x26) ||
+	    (model == 0x27) ||
+	    (model == 0x35) ||
+	    (model == 0x36)) {
+		return;
+	}
+
+	msr_regs_t regs;
+	if (ctemp_rdmsr(cpu, MSR_IA32_TEMPERATURE_TARGET, &regs) != 0) {
+		return;
+	}
+
+	ctemp_kstat_t.tj_max.value.i32 = (regs.eax >> 16) & 0xff;
+	ctemp_kstat_t.target_temp.value.i32 =
+	    ctemp_kstat_t.tj_max.value.i32 - ((regs.eax >> 8) & 0xff);
+
+}
+
+static void
+ctemp_fill_core_temp(cpu_t *cpu)
+{
+	if ((current_cpuid.cp_eax & 0x01) == 0) {
+		return;
+	}
+
+	msr_regs_t regs;
+	if (ctemp_rdmsr(cpu, MSR_IA32_THERM_STATUS, &regs) != 0) {
+		return;
+	}
+
+	if (regs.eax & 0x80000000) {
+		ctemp_kstat_t.core_temp.value.i32 =
+		    ctemp_kstat_t.tj_max.value.i32 - ((regs.eax >> 16) & 0x7f);
+		ctemp_kstat_t.valid.value.i32 = 1;
+	}
+
+}
+
+static void
+ctemp_fill_pkg_temp(cpu_t *cpu)
+{
+	ctemp_kstat_t.chip_temp.value.i32 = ctemp_kstat_t.core_temp.value.i32;
+
+	if (((current_cpuid.cp_eax >> 6) & 0x01) == 0) {
+		return;
+	}
+
+	msr_regs_t regs;
+
+	if (ctemp_rdmsr(cpu, MSR_IA32_PACKAGE_THERM_STATUS, &regs) != 0) {
+		return;
+	}
+
+	ctemp_kstat_t.chip_temp.value.i32 =
+	    ctemp_kstat_t.tj_max.value.i32 - ((regs.eax >> 16) & 0x7f);
+
+}
+
 /* Execute CPUID on specified CPU */
 static void
-coretemp_cpuid_on_cpu(cpu_t *cpu, uint32_t cpuid_func,
+ctemp_cpuid(cpu_t *cpu, uint32_t cpuid_func,
     struct cpuid_regs *result)
 {
 	result->cp_eax = cpuid_func;
