@@ -59,6 +59,7 @@ static kmutex_t ctemp_mutex;
 struct ctemp_kstat_t {
 		kstat_named_t chip_id;
 		kstat_named_t core_id;
+		kstat_named_t thread_id;
 		kstat_named_t core_temp;
 		kstat_named_t chip_temp;
 		kstat_named_t tj_max;
@@ -67,6 +68,7 @@ struct ctemp_kstat_t {
 } ctemp_kstat_t = {
 		{ "chip_id",		KSTAT_DATA_INT32 },
 		{ "core_id",		KSTAT_DATA_INT32 },
+		{ "thread_id",		KSTAT_DATA_INT32 },
 		{ "core_temp",		KSTAT_DATA_INT32 },
 		{ "chip_temp",		KSTAT_DATA_INT32 },
 		{ "tj_max",		KSTAT_DATA_INT32 },
@@ -87,7 +89,15 @@ typedef struct {
 	uint64_t *result;
 } msr_req_t;
 
+typedef struct {
+	int chip_id;
+	int core_id;
+	cpu_t *cpu;
+} ctemp_core_t;
+
 kstat_t *entries[1024];
+ctemp_core_t cores[1024];
+int ncores = 0;
 
 static int ctemp_fill_fields(cpu_t *cpu);
 
@@ -118,9 +128,12 @@ ctemp_kstat_update(kstat_t *kstat, int rw)
 	ctemp_fill_fields(cpu_ptr);
 
 	/* misc data */
-	ctemp_kstat_t.core_id.value.i32 = cpuid_get_pkgcoreid(cpu_ptr);
+	ctemp_kstat_t.core_id.value.i32 =
+	    cpuid_get_pkgcoreid(cpu_ptr);
 	ctemp_kstat_t.chip_id.value.i32 =
-	    pg_plat_hw_instance_id(cpu_ptr, PGHW_CHIP);
+	    cpuid_get_chipid(cpu_ptr);
+	ctemp_kstat_t.thread_id.value.i32 =
+	    cpuid_get_clogid(cpu_ptr);
 
 	return (0);
 }
@@ -172,9 +185,37 @@ ctemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 
 	ctemp_devi = devi;
 
-	/* initialize a kstat instance for each CPU */
-	int i;
+	int i, j;
+	/* find physical cores */
+
 	for (i = 0; i < ncpus; i++) {
+		cpu_t *processor = cpu[i];
+
+		int chip_id = cpuid_get_chipid(processor);
+		int core_id = cpuid_get_coreid(processor);
+
+		/* see if we already visited this core */
+		int visited = 0;
+		for (j = 0; j < ncores; j++) {
+			if ((cores[j].chip_id == chip_id) &&
+			    (cores[j].core_id == core_id)) {
+				visited = 1;
+				break;
+			}
+		}
+		if (!visited) {
+			cores[ncores].chip_id = chip_id;
+			cores[ncores].core_id = core_id;
+			cores[ncores].cpu = processor;
+			ncores++;
+		}
+
+	}
+
+
+	/* initialize a kstat instance for each core */
+
+	for (i = 0; i < ncores; i++) {
 		kstat_t *ksp = kstat_create(
 		    KSTAT_CORETEMP_MODULE,
 		    i,
@@ -192,7 +233,7 @@ ctemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		ksp->ks_data = (void *)&ctemp_kstat_t;
 		ksp->ks_lock = &ctemp_mutex;
 		ksp->ks_update = ctemp_kstat_update;
-		ksp->ks_private = (void *)cpu[i];
+		ksp->ks_private = (void *)cores[i].cpu;
 		kstat_install(ksp);
 	}
 	return (DDI_SUCCESS);
