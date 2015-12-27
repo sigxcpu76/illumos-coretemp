@@ -1,14 +1,21 @@
-CFLAGS=-Wall -Wno-missing-braces -I.
-KFLAGS=-D_KERNEL -m64 -mcmodel=kernel -mno-red-zone -ffreestanding -nodefaultlibs
-KLDFLAGS=-r
+VERSION=0.1
+CFLAGS=-Wall -Wno-missing-braces -I. -g
+KFLAGS=-D_KERNEL -m64 -mcmodel=kernel -mno-red-zone -ffreestanding -nodefaultlibs -g
+KLDFLAGS=-r -dy -N misc/coretemp
 LDFLAGS=-lkstat
+
+GCC=gcc
+LD=ld
+CTFCONVERT=ctfconvert
+CTFMERGE=ctfmerge
 
 all: coretemp coretempstat
 
-coretemp.o: coretemp.c
-	gcc $(CFLAGS) $(KFLAGS) -c coretemp.c
-coretemp: coretemp.o
-	ld $(KLDFLAGS) -o coretemp coretemp.o
+coretemp: coretemp.c coretemp.h
+	$(GCC) $(CFLAGS) $(KFLAGS) -c coretemp.c -o coretemp.o
+	$(CTFCONVERT) -i -L VERSION coretemp.o
+	$(LD) $(KLDFLAGS) coretemp.o -o coretemp
+	$(CTFMERGE) -L VERSION -o coretemp coretemp.o
 
 coretempstat: coretempstat.c
 	gcc $(CFLAGS) -std=gnu99 -o coretempstat $(LDFLAGS) coretempstat.c

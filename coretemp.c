@@ -274,7 +274,7 @@ static struct dev_ops ctemp_dv_ops = {
 
 static struct modldrv modldrv = {
 	&mod_driverops,
-	"coretemp driver 1.0",
+	"coretemp driver 0.1",
 	&ctemp_dv_ops
 };
 
