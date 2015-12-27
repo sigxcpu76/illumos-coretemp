@@ -12,4 +12,7 @@
 #define	MSR_IA32_PACKAGE_THERM_STATUS	0x000001b1
 #define	MSR_IA32_TEMPERATURE_TARGET	0x000001a2
 
+/* own stuff */
+#define	MAX_CPUS	1024
+
 #endif /* ifndef __CORETEMP_H */

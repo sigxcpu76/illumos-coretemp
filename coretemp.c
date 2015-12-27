@@ -95,9 +95,7 @@ typedef struct {
 	cpu_t *cpu;
 } ctemp_core_t;
 
-kstat_t *entries[1024];
-ctemp_core_t cores[1024];
-int ncores = 0;
+kstat_t *ctemp_kstat_entries[MAX_CPUS];
 
 static int ctemp_fill_fields(cpu_t *cpu);
 
@@ -186,8 +184,12 @@ ctemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	ctemp_devi = devi;
 
 	int i, j;
+	int ncores;
+	ctemp_core_t cores[MAX_CPUS];
+
 	/* find physical cores */
 
+	ncores = 0;
 	for (i = 0; i < ncpus; i++) {
 		cpu_t *processor = cpu[i];
 
@@ -229,7 +231,7 @@ ctemp_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 			return (DDI_FAILURE);
 		}
 
-		entries[i] = ksp;
+		ctemp_kstat_entries[i] = ksp;
 		ksp->ks_data = (void *)&ctemp_kstat_t;
 		ksp->ks_lock = &ctemp_mutex;
 		ksp->ks_update = ctemp_kstat_update;
@@ -249,7 +251,7 @@ ctemp_detach(dev_info_t *devi, ddi_detach_cmd_t cmd)
 
 	int i;
 	for (i = 0; i < ncpus; i++) {
-		kstat_delete(entries[i]);
+		kstat_delete(ctemp_kstat_entries[i]);
 	}
 
 	return (DDI_SUCCESS);
