@@ -77,6 +77,8 @@ struct ctemp_kstat_t {
 
 };
 
+#define KSTAT_VAL(__V__) ctemp_kstat_t.__V__.value.i32
+
 static struct cpuid_regs current_cpuid;
 
 typedef struct {
@@ -97,16 +99,15 @@ typedef struct {
 
 kstat_t *ctemp_kstat_entries[MAX_CPUS];
 
-static int ctemp_fill_fields(cpu_t *cpu);
+static int ctemp_fill_fields(cpu_t *);
 
-static int ctemp_rdmsr(cpu_t *cpu,
-	uint32_t msr_index, msr_regs_t *result);
-static void ctemp_cpuid(cpu_t *cpu, uint32_t cpuid_func,
-    struct cpuid_regs *result);
+static int ctemp_rdmsr(cpu_t *, uint32_t, msr_regs_t *);
+static void ctemp_cpuid(cpu_t *, uint32_t, struct cpuid_regs *);
 
 static void ctemp_fill_tj_max(cpu_t *cpu);
 static void ctemp_fill_pkg_temp(cpu_t *cpu);
 static void ctemp_fill_core_temp(cpu_t *cpu);
+static void ctemp_msr_req(uintptr_t, uintptr_t);
 
 static int
 ctemp_kstat_update(kstat_t *kstat, int rw)
@@ -114,8 +115,6 @@ ctemp_kstat_update(kstat_t *kstat, int rw)
 	if (rw == KSTAT_WRITE) {
 		return (EACCES);
 	}
-
-	ctemp_kstat_t.valid.value.i32 = 0;
 
 	if (!is_x86_feature(x86_featureset, X86FSET_MSR)) {
 		return (ENXIO);
@@ -126,12 +125,9 @@ ctemp_kstat_update(kstat_t *kstat, int rw)
 	ctemp_fill_fields(cpu_ptr);
 
 	/* misc data */
-	ctemp_kstat_t.core_id.value.i32 =
-	    cpuid_get_coreid(cpu_ptr);
-	ctemp_kstat_t.chip_id.value.i32 =
-	    cpuid_get_chipid(cpu_ptr);
-	ctemp_kstat_t.thread_id.value.i32 =
-	    cpuid_get_clogid(cpu_ptr);
+	KSTAT_VAL(core_id) = cpuid_get_coreid(cpu_ptr);
+	KSTAT_VAL(chip_id) = cpuid_get_chipid(cpu_ptr);
+  KSTAT_VAL(thread_id) = cpuid_get_clogid(cpu_ptr);
 
 	return (0);
 }
@@ -310,12 +306,12 @@ intel_fill_fields(cpu_t *cpu)
 	/* initialize data with common values */
 	ctemp_cpuid(cpu, 0x06, &current_cpuid);
 
-	/* initialize with invalid values */
-	ctemp_kstat_t.tj_max.value.i32 = 100;
-	ctemp_kstat_t.chip_temp.value.i32 = 0;
-	ctemp_kstat_t.core_temp.value.i32 = 0;
-	ctemp_kstat_t.target_temp.value.i32 = 0;
-	ctemp_kstat_t.valid.value.i32 = 0;
+	/* initialize with dummy data */
+	KSTAT_VAL(tj_max) = 100;
+	KSTAT_VAL(chip_temp) = 0;
+	KSTAT_VAL(core_temp) = 0;
+	KSTAT_VAL(target_temp) = 0;
+	KSTAT_VAL(valid) = 0;
 
 	/* fill Tj_max information */
 	ctemp_fill_tj_max(cpu);
@@ -340,48 +336,6 @@ ctemp_fill_fields(cpu_t *cpu)
 
 }
 
-/* Execute RDMSR on specified CPU */
-static void
-ctemp_msr_req(uintptr_t req_ptr, uintptr_t error_ptr)
-{
-
-	label_t ljb;
-	uint32_t msr_index;
-	uint64_t *result;
-
-	msr_index = ((msr_req_t *)req_ptr)->msr_index;
-	result = ((msr_req_t *)req_ptr)->result;
-
-	int error;
-
-	if (on_fault(&ljb)) {
-		dev_err(ctemp_devi, CE_WARN,
-		    "Invalid rdmsr(0x%08" PRIx32 ")", (uint32_t)msr_index);
-		error = EFAULT;
-	} else {
-		error = checked_rdmsr(msr_index, result);
-	}
-
-	*((int *)error_ptr) = error;
-
-	return;
-
-}
-
-static int
-ctemp_rdmsr(cpu_t *cpu, uint32_t msr_index, msr_regs_t *result)
-{
-	int error;
-
-	msr_req_t request;
-	request.msr_index = msr_index;
-	request.result = (uint64_t *)result;
-
-	cpu_call(cpu, (cpu_call_func_t)ctemp_msr_req,
-	    (uintptr_t)&request, (uintptr_t)&error);
-
-	return (error);
-}
 
 static void
 ctemp_fill_tj_max(cpu_t *cpu)
@@ -405,10 +359,8 @@ ctemp_fill_tj_max(cpu_t *cpu)
 		return;
 	}
 
-	ctemp_kstat_t.tj_max.value.i32 = (regs.eax >> 16) & 0xff;
-	ctemp_kstat_t.target_temp.value.i32 =
-	    ctemp_kstat_t.tj_max.value.i32 - ((regs.eax >> 8) & 0xff);
-
+	KSTAT_VAL(tj_max) = (regs.eax >> 16) & 0x7f;
+	KSTAT_VAL(target_temp) = KSTAT_VAL(tj_max) - ((regs.eax >> 8) & 0xff);
 }
 
 static void
@@ -424,9 +376,8 @@ ctemp_fill_core_temp(cpu_t *cpu)
 	}
 
 	if (regs.eax & 0x80000000) {
-		ctemp_kstat_t.core_temp.value.i32 =
-		    ctemp_kstat_t.tj_max.value.i32 - ((regs.eax >> 16) & 0x7f);
-		ctemp_kstat_t.valid.value.i32 = 1;
+    KSTAT_VAL(core_temp) = KSTAT_VAL(tj_max) - ((regs.eax >> 16) & 0x7f);
+    KSTAT_VAL(valid) = 1;
 	}
 
 }
@@ -434,7 +385,7 @@ ctemp_fill_core_temp(cpu_t *cpu)
 static void
 ctemp_fill_pkg_temp(cpu_t *cpu)
 {
-	ctemp_kstat_t.chip_temp.value.i32 = ctemp_kstat_t.core_temp.value.i32;
+	KSTAT_VAL(chip_temp) = KSTAT_VAL(core_temp);
 
 	if (((current_cpuid.cp_eax >> 6) & 0x01) == 0) {
 		return;
@@ -446,8 +397,7 @@ ctemp_fill_pkg_temp(cpu_t *cpu)
 		return;
 	}
 
-	ctemp_kstat_t.chip_temp.value.i32 =
-	    ctemp_kstat_t.tj_max.value.i32 - ((regs.eax >> 16) & 0x7f);
+	KSTAT_VAL(chip_temp) = KSTAT_VAL(tj_max) - ((regs.eax >> 16) & 0x7f);
 
 }
 
@@ -460,3 +410,47 @@ ctemp_cpuid(cpu_t *cpu, uint32_t cpuid_func,
 	result->cp_ebx = result->cp_ecx = result->cp_edx = 0;
 	(void) cpuid_insn(cpu, result);
 }
+
+static int
+ctemp_rdmsr(cpu_t *cpu, uint32_t msr_index, msr_regs_t *result)
+{
+  int error;
+
+  msr_req_t request;
+  request.msr_index = msr_index;
+  request.result = (uint64_t *)result;
+
+  cpu_call(cpu, (cpu_call_func_t)ctemp_msr_req,
+      (uintptr_t)&request, (uintptr_t)&error);
+
+  return (error);
+}
+
+/* Execute RDMSR on specified CPU */
+static void
+ctemp_msr_req(uintptr_t req_ptr, uintptr_t error_ptr)
+{
+
+  label_t ljb;
+  uint32_t msr_index;
+  uint64_t *result;
+
+  msr_index = ((msr_req_t *)req_ptr)->msr_index;
+  result = ((msr_req_t *)req_ptr)->result;
+
+  int error;
+
+  if (on_fault(&ljb)) {
+    dev_err(ctemp_devi, CE_WARN,
+        "Invalid rdmsr(0x%08" PRIx32 ")", (uint32_t)msr_index);
+    error = EFAULT;
+  } else {
+    error = checked_rdmsr(msr_index, result);
+  }
+
+  *((int *)error_ptr) = error;
+
+  return;
+
+}
+
