@@ -127,7 +127,7 @@ ctemp_kstat_update(kstat_t *kstat, int rw)
 
 	/* misc data */
 	ctemp_kstat_t.core_id.value.i32 =
-	    cpuid_get_pkgcoreid(cpu_ptr);
+	    cpuid_get_coreid(cpu_ptr);
 	ctemp_kstat_t.chip_id.value.i32 =
 	    cpuid_get_chipid(cpu_ptr);
 	ctemp_kstat_t.thread_id.value.i32 =

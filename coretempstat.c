@@ -81,7 +81,10 @@ main(int argc, char *argv[1])
 		    cpu_socket_count, (cpu_socket_count == 1) ? "" : "s");
 	}
 
+	int package_displayed = 0;
 	for (c_socket = 0; c_socket < cpu_socket_count; c_socket++) {
+		package_displayed = 0;
+		int core_count = 0;
 		for (c_core = 0; c_core < MAX_CPUS; c_core++) {
 			core_ptr = find_cpu(cpus, cpu_count, c_socket, c_core);
 
@@ -98,7 +101,8 @@ main(int argc, char *argv[1])
 				continue;
 			}
 
-			if (core_ptr->core_id == 0 && machine_readable == 0) {
+			if (!package_displayed && machine_readable == 0) {
+				package_displayed = 1;
 				/* first core. display package information */
 				temp =
 				    read_value(kstat, c_index, "chip_temp");
@@ -112,7 +116,7 @@ main(int argc, char *argv[1])
 
 			temp = read_value(kstat, c_index, "core_temp");
 			if (machine_readable == 0) {
-				printf("\tCore #%d", core_ptr->core_id);
+				printf("\tCore #%d", core_count++);
 				if (temp >= 0) {
 					printf(" temp : %d \u00B0C\n", temp);
 				} else {
