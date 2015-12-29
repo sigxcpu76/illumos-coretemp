@@ -47,6 +47,7 @@
 #include <sys/systeminfo.h>
 #include <sys/cpuvar.h>
 #include <sys/pghw.h>
+#include <sys/ontrap.h>
 
 #include <coretemp.h>
 
@@ -77,7 +78,7 @@ struct ctemp_kstat_t {
 
 };
 
-#define KSTAT_VAL(__V__) ctemp_kstat_t.__V__.value.i32
+#define	KSTAT_VAL(__V__) ctemp_kstat_t.__V__.value.i32
 
 static struct cpuid_regs current_cpuid;
 
@@ -127,7 +128,7 @@ ctemp_kstat_update(kstat_t *kstat, int rw)
 	/* misc data */
 	KSTAT_VAL(core_id) = cpuid_get_coreid(cpu_ptr);
 	KSTAT_VAL(chip_id) = cpuid_get_chipid(cpu_ptr);
-  KSTAT_VAL(thread_id) = cpuid_get_clogid(cpu_ptr);
+	KSTAT_VAL(thread_id) = cpuid_get_clogid(cpu_ptr);
 
 	return (0);
 }
@@ -376,8 +377,9 @@ ctemp_fill_core_temp(cpu_t *cpu)
 	}
 
 	if (regs.eax & 0x80000000) {
-    KSTAT_VAL(core_temp) = KSTAT_VAL(tj_max) - ((regs.eax >> 16) & 0x7f);
-    KSTAT_VAL(valid) = 1;
+		KSTAT_VAL(core_temp) =
+		    KSTAT_VAL(tj_max) - ((regs.eax >> 16) & 0x7f);
+		KSTAT_VAL(valid) = 1;
 	}
 
 }
@@ -414,43 +416,56 @@ ctemp_cpuid(cpu_t *cpu, uint32_t cpuid_func,
 static int
 ctemp_rdmsr(cpu_t *cpu, uint32_t msr_index, msr_regs_t *result)
 {
-  int error;
+	int error;
 
-  msr_req_t request;
-  request.msr_index = msr_index;
-  request.result = (uint64_t *)result;
+	if (cpu == NULL) {
+		cpu = CPU;
+	}
 
-  cpu_call(cpu, (cpu_call_func_t)ctemp_msr_req,
-      (uintptr_t)&request, (uintptr_t)&error);
+	msr_req_t request;
+	request.msr_index = msr_index;
+	request.result = (uint64_t *)result;
 
-  return (error);
+	cpu_call(cpu, (cpu_call_func_t)ctemp_msr_req,
+	    (uintptr_t)&request, (uintptr_t)&error);
+
+	return (error);
 }
 
 /* Execute RDMSR on specified CPU */
 static void
 ctemp_msr_req(uintptr_t req_ptr, uintptr_t error_ptr)
 {
+	// label_t ljb;
+	uint32_t msr_index;
+	uint64_t *result;
 
-  label_t ljb;
-  uint32_t msr_index;
-  uint64_t *result;
+	msr_index = ((msr_req_t *)req_ptr)->msr_index;
+	result = ((msr_req_t *)req_ptr)->result;
 
-  msr_index = ((msr_req_t *)req_ptr)->msr_index;
-  result = ((msr_req_t *)req_ptr)->result;
+	int error;
 
-  int error;
+	// if (on_fault(&ljb)) {
+	// 	dev_err(ctemp_devi, CE_WARN,
+	// "Invalid rdmsr(0x%08" PRIx32 ")", (uint32_t)msr_index);
+	// 	error = EFAULT;
+	// } else {
+	// 	error = checked_rdmsr(msr_index, result);
+	// }
+	on_trap_data_t otd;
 
-  if (on_fault(&ljb)) {
-    dev_err(ctemp_devi, CE_WARN,
-        "Invalid rdmsr(0x%08" PRIx32 ")", (uint32_t)msr_index);
-    error = EFAULT;
-  } else {
-    error = checked_rdmsr(msr_index, result);
-  }
+	if (on_trap(&otd, OT_DATA_ACCESS) == 0) {
+		error = checked_rdmsr(msr_index, result);
+	} else {
+		dev_err(ctemp_devi, CE_WARN,
+		    "Invalid rdmsr(0x%08" PRIx32 ")", (uint32_t)msr_index);
 
-  *((int *)error_ptr) = error;
+		error = EFAULT;
+	}
+	no_trap();
 
-  return;
+	*((int *)error_ptr) = error;
+
+	return;
 
 }
-
