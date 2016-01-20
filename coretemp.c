@@ -436,7 +436,6 @@ ctemp_rdmsr(cpu_t *cpu, uint32_t msr_index, msr_regs_t *result)
 static void
 ctemp_msr_req(uintptr_t req_ptr, uintptr_t error_ptr)
 {
-	// label_t ljb;
 	uint32_t msr_index;
 	uint64_t *result;
 
@@ -445,13 +444,6 @@ ctemp_msr_req(uintptr_t req_ptr, uintptr_t error_ptr)
 
 	int error;
 
-	// if (on_fault(&ljb)) {
-	// 	dev_err(ctemp_devi, CE_WARN,
-	// "Invalid rdmsr(0x%08" PRIx32 ")", (uint32_t)msr_index);
-	// 	error = EFAULT;
-	// } else {
-	// 	error = checked_rdmsr(msr_index, result);
-	// }
 	on_trap_data_t otd;
 
 	if (on_trap(&otd, OT_DATA_ACCESS) == 0) {
